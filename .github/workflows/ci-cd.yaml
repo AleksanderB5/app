@@ -4,7 +4,7 @@ on:
   push:
     branches: ["main"]
     tags:
-      - "v*.*.*"
+      - "v..*"
 
 permissions:
   contents: read
@@ -31,7 +31,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_PAT }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push (sha + latest)
         uses: docker/build-push-action@v4
