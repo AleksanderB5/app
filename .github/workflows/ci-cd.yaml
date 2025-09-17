@@ -1,5 +1,4 @@
 name: CI/CD
-
 on:
   push:
     branches: ["main"]
@@ -10,15 +9,21 @@ permissions:
   contents: read
   packages: write
 
-env:
-  IMAGE: ghcr.io/${{ github.repository }}
-
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.set-image.outputs.image }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set IMAGE to lowercase (for this job and as output)
+        id: set-image
+        run: |
+          IMAGE=ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
@@ -71,7 +76,7 @@ jobs:
 
       - name: Deploy to Kubernetes (update image)
         env:
-          IMAGE: ${{ env.IMAGE }}
+          IMAGE: ${{ needs.build.outputs.image }}
         run: |
           IMAGE_TAG=${{ github.ref_name }}
           FULL_IMAGE="${IMAGE}:${IMAGE_TAG}"
