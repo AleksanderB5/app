@@ -45,8 +45,8 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v4
         with:
-          context: ./app1
-          file: ./app1/Dockerfile
+          context:
+          file: ./Dockerfile
           push: true
           tags: |
             ghcr.io/${{ env.IMAGE_NAME }}:latest
