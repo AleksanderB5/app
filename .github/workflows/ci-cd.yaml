@@ -102,12 +102,66 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup kubectl
-        uses: azure/setup-kubectl@v3
+        uses: azure/setup-kubectl@v4
 
       - name: Restore kubeconfig
+        env:
+          KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
         run: |
-          echo "${{ secrets.KUBE_CONFIG_DATA }}" | base64 -d > $HOME/.kube/config
-          chmod 600 $HOME/.kube/config
+          set -euo pipefail
+
+          echo "Restoring kubeconfig..."
+          mkdir -p "$HOME/.kube"
+
+          if [ -z "${KUBE_CONFIG_DATA:-}" ]; then
+            echo "KUBE_CONFIG_DATA is empty" >&2
+            exit 1
+          fi
+
+          # Если секрет уже plain kubeconfig (обычно содержит apiVersion:)
+          if printf '%s' "$KUBE_CONFIG_DATA" | grep -q 'apiVersion:'; then
+            printf '%s' "$KUBE_CONFIG_DATA" > "$HOME/.kube/config"
+          else
+            # Попытка декодирования base64 (--decode для GNU, -d для BSD)
+            if printf '%s' "$KUBE_CONFIG_DATA" | base64 --decode > "$HOME/.kube/config" 2>/dev/null; then
+              :
+            elif printf '%s' "$KUBE_CONFIG_DATA" | base64 -d > "$HOME/.kube/config" 2>/dev/null; then
+              :
+            else
+              echo "Failed to decode KUBE_CONFIG_DATA as base64 and it doesn't look like kubeconfig" >&2
+              exit 1
+            fi
+          fi
+
+          chmod 600 "$HOME/.kube/config"
+          echo "kubeconfig restored to $HOME/.kube/config"
+
+      - name: Ensure namespace exists
+        run: |
+          kubectl create namespace stage --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Create GHCR imagePullSecret in namespace 'stage' (optional)
+        # Создаётся только если в Secrets задан GHCR_TOKEN
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GHCR_TOKEN:-}" ]; then
+            echo "GHCR_TOKEN not set; skipping creation of ghcr-regcred secret"
+            exit 0
+          fi
+          # Обновим/создадим секрет ghcr-regcred в namespace stage
+          kubectl -n stage delete secret ghcr-regcred --ignore-not-found
+          kubectl -n stage create secret docker-registry ghcr-regcred \
+            --docker-server=ghcr.io \
+            --docker-username="${{ github.actor }}" \
+            --docker-password="${GHCR_TOKEN}" \
+            --docker-email=github-actions@github.com
+
+      - name: Quick kubectl checks
+        run: |
+          kubectl config current-context || true
+          kubectl auth can-i get pods --all-namespaces || true
 
       - name: Deploy to Kubernetes (update image)
         env:
