@@ -1,0 +1,6 @@
+FROM nginx:latest
+#Configuration
+ADD conf /etc/nginx
+#Content
+ADD content /usr/share/nginx/html
+EXPOSE 80
