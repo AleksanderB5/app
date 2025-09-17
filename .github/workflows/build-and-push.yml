@@ -20,7 +20,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Debug: show github context
+    - name: Debug github context
       run: |
         echo "github.repository (from env): $GITHUB_REPOSITORY"
         echo "github.repository (from expr): ${{ github.repository }}"
