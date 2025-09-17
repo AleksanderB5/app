@@ -1,13 +1,19 @@
 name: CI/CD
+
 on:
   push:
     branches: ["main"]
+    # Теги формата vMAJOR.MINOR.PATCH, напр. v1.0.0
     tags:
-      - "v..*"
+      - "v*.*.*"
 
 permissions:
   contents: read
   packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -18,12 +24,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set IMAGE to lowercase (for this job and as output)
+      - name: Set IMAGE to lowercase (job output + env)
         id: set-image
         run: |
           IMAGE=ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
@@ -39,24 +45,53 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push (sha + latest)
+        if: "!startsWith(github.ref, 'refs/tags/')"
         uses: docker/build-push-action@v4
         with:
           context: .
+          file: ./Dockerfile
           push: true
           tags: |
-            ${{ env.IMAGE }}:${{ github.sha }}
-            ${{ env.IMAGE }}:latest
-          file: ./Dockerfile
+            ${{ steps.set-image.outputs.image }}:${{ github.sha }}
+            ${{ steps.set-image.outputs.image }}:latest
+
+      - name: Push audit (verify sha + latest exist in registry)
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        env:
+          IMAGE: ${{ steps.set-image.outputs.image }}
+        run: |
+          set -euo pipefail
+          for TAG in "${GITHUB_SHA}" latest; do
+            IMG="$IMAGE:$TAG"
+            echo "Inspecting $IMG"
+            # try buildx imagetools, fallback to docker manifest inspect
+            docker buildx imagetools inspect "$IMG" || docker manifest inspect "$IMG" || {
+              echo "WARNING: cannot inspect $IMG"
+            }
+          done
 
       - name: Build and push (tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: docker/build-push-action@v4
         with:
           context: .
+          file: ./Dockerfile
           push: true
           tags: |
-            ${{ env.IMAGE }}:${{ github.ref_name }}
-          file: ./Dockerfile
+            ${{ steps.set-image.outputs.image }}:${{ github.ref_name }}
+
+      - name: Push audit (verify tag image in registry)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          IMAGE: ${{ steps.set-image.outputs.image }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          IMG="$IMAGE:$TAG"
+          echo "Inspecting $IMG"
+          docker buildx imagetools inspect "$IMG" || docker manifest inspect "$IMG" || {
+            echo "WARNING: cannot inspect $IMG"
+          }
 
   deploy:
     needs: build
@@ -77,8 +112,10 @@ jobs:
       - name: Deploy to Kubernetes (update image)
         env:
           IMAGE: ${{ needs.build.outputs.image }}
+          IMAGE_TAG: ${{ github.ref_name }}
         run: |
-          IMAGE_TAG=${{ github.ref_name }}
+          set -euo pipefail
           FULL_IMAGE="${IMAGE}:${IMAGE_TAG}"
-          kubectl -n stage set image deployment/test-app test-app=$FULL_IMAGE --record
+          echo "Deploying $FULL_IMAGE to namespace 'stage'"
+          kubectl -n stage set image deployment/test-app test-app="$FULL_IMAGE" --record
           kubectl -n stage rollout status deployment/test-app --timeout=2m
