@@ -1,0 +1,5 @@
+ci-kubeconfig.b64
+ci-kubeconfig
+ca.b64
+ci-kubeconfig.bak
+*.kubeconfig
