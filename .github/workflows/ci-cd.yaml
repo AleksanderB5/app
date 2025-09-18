@@ -1,4 +1,4 @@
-name: CI/CD - build, push, deploy on tag
+name: CI/CD - build, push, deploy on tag (auto-extract manifest)
 
 permissions:
   contents: read
@@ -12,7 +12,7 @@ on:
       - 'v*'
 
 env:
-  IMAGE_NAME: ghcr.io/AleksanderB5/app
+  IMAGE_NAME: ghcr.io/aleksanderb5/app
 
 jobs:
   build-and-push:
@@ -110,4 +110,4 @@ jobs:
 
           echo "Deploying ${IMAGE} to ${DEPLOYMENT_NAME} (container ${CONTAINER_NAME}) in namespace ${NAMESPACE}"
           kubectl -n "${NAMESPACE}" set image deployment/"${DEPLOYMENT_NAME}" "${CONTAINER_NAME}"=${IMAGE} --record
-          kubectl -n "${NAMESPACE}" rollout status deployment/"${DEPLOYMENT_NAME}" --timeout=180s
+          kubectl -n "${NAMESPACE}" rollout status deployment/"${DEPLOYMENT_NAME}" --timeout=180
