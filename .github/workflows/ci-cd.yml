@@ -43,8 +43,8 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
-          context: .            # <-- изменено: брать контекст из корня репозитория
-          file: ./Dockerfile    # <-- укажите путь к вашему Dockerfile, если он в другом месте — поправьте
+          context: .                # берем контекст из корня репозитория
+          file: ./Dockerfile        # путь к Dockerfile (при необходимости поправьте)
           push: true
           tags: |
             ${{ env.CONTAINER_IMAGE }}:${{ github.ref_name }}
@@ -70,10 +70,30 @@ jobs:
         env:
           KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG }}
         run: |
+          set -euo pipefail
           export KUBECONFIG=/tmp/kubeconfig
-          mkdir -p $(dirname $KUBECONFIG)
-          echo "$KUBE_CONFIG_B64" | base64 --decode > $KUBECONFIG
-          chmod 600 $KUBECONFIG
+          mkdir -p "$(dirname "$KUBECONFIG")"
+
+          # Если секрет содержит явный YAML (начинается с "apiVersion" или "kind"),
+          # запишем его напрямую. Иначе попробуем декодировать как base64.
+          FIRST_CHARS="$(printf '%s' "$KUBE_CONFIG_B64" | head -c 64)"
+          if printf '%s' "$FIRST_CHARS" | tr '[:upper:]' '[:lower:]' | grep -q -E 'apiversion|^kind'; then
+            printf '%s' "$KUBE_CONFIG_B64" > "$KUBECONFIG"
+            echo "Wrote raw kubeconfig to $KUBECONFIG"
+          else
+            if printf '%s' "$KUBE_CONFIG_B64" | base64 --decode > "$KUBECONFIG" 2>/tmp/base64.err; then
+              echo "Decoded base64 kubeconfig to $KUBECONFIG"
+            else
+              echo "Base64 decode failed. Diagnostic:"
+              echo "First 120 bytes of secret (raw):"
+              printf '%s' "$KUBE_CONFIG_B64" | head -c 120 | hexdump -C || true
+              echo "base64 error output:"
+              sed -n '1,200p' /tmp/base64.err || true
+              exit 1
+            fi
+          fi
+
+          chmod 600 "$KUBECONFIG"
         shell: bash
 
       - name: Verify cluster access
@@ -88,12 +108,15 @@ jobs:
           TAG: ${{ github.ref_name }}
           IMAGE: ${{ env.CONTAINER_IMAGE }}
         run: |
+          # Если ваш deploy.yaml лежит в поддиректории, поправьте путь ниже.
           cp ./deploy.yaml ./deploy-rendered.yaml
           sed -i "s|__tagged_image__|${IMAGE}:${TAG}|g" ./deploy-rendered.yaml
-          echo "Rendered deploy manifest:"
+          echo "Rendered deploy manifest (first 200 lines):"
           sed -n '1,200p' ./deploy-rendered.yaml
 
       - name: Deploy manifests
         run: |
           export KUBECONFIG=/tmp/kubeconfig
           kubectl apply -f ./deploy-rendered.yaml
+        shell: bash
+
