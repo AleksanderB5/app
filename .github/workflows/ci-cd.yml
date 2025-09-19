@@ -1,0 +1,100 @@
+name: CI/CD (build → push → deploy)
+
+on:
+  push:
+    tags:
+      - 'v*'   # триггер по тегам, пример: v1.0.0
+
+env:
+  # Значения подтягиваются из GitHub Secrets
+  DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+  CONTAINER_IMAGE: ${{ secrets.CONTAINER_IMAGE }}
+
+jobs:
+  build-and-push:
+    name: Build and Push Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag
+        id: tag
+        run: echo "TAG=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Ensure tag was created from main (optional safety check)
+        run: |
+          # убедимся, что коммит по тегу входит в историю origin/main
+          git fetch origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "Tag commit is not descendant of origin/main. Aborting."
+            exit 1
+          fi
+
+      - name: Log in to registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ secrets.DOCKER_REGISTRY }}
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./app
+          push: true
+          tags: |
+            ${{ env.CONTAINER_IMAGE }}:${{ github.ref_name }}
+            ${{ env.CONTAINER_IMAGE }}:latest
+
+  deploy:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    needs: build-and-push
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+
+      - name: Restore kubeconfig from secret
+        env:
+          KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          mkdir -p $(dirname $KUBECONFIG)
+          echo "$KUBE_CONFIG_B64" | base64 --decode > $KUBECONFIG
+          chmod 600 $KUBECONFIG
+          echo "KUBECONFIG restored to $KUBECONFIG"
+        shell: bash
+
+      - name: Verify cluster access
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          kubectl version --client
+          kubectl get nodes --no-headers || kubectl cluster-info
+        shell: bash
+
+      - name: Render manifest (set image)
+        env:
+          TAG: ${{ github.ref_name }}
+          IMAGE: ${{ env.CONTAINER_IMAGE }}
+        run: |
+          cp ./app/deploy.yaml ./app/deploy-rendered.yaml
+          sed -i "s|__tagged_image__|${IMAGE}:${TAG}|g" ./app/deploy-rendered.yaml
+          echo "Rendered deploy manifest:"
+          sed -n '1,200p' ./app/deploy-rendered.yaml
+
+      - name: Deploy manifests
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig
+          kubectl apply -f ./app/deploy-rendered.yaml
